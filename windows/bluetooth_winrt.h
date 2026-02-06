@@ -64,6 +64,12 @@ bool BluetoothIsConnected(const std::string& device_id);
 /// Send raw bytes to the device. Returns true on success.
 bool BluetoothSend(const std::string& device_id, const uint8_t* data, size_t size);
 
+/// Async version: runs on MTA worker, invokes callback(bool ok).
+void BluetoothSendAsync(const std::string& device_id,
+                        const uint8_t* data,
+                        size_t size,
+                        std::function<void(bool)> callback);
+
 }  // namespace flutter_thermal_printer_windows
 
 #endif  // FLUTTER_PLUGIN_BLUETOOTH_WINRT_H_

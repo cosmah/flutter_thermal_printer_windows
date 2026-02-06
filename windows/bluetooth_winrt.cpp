@@ -51,6 +51,8 @@ static void BtLog(const std::string& msg) {
 #define BT_LOG(x) do { std::ostringstream _s; _s << x; BtLog(_s.str()); } while(0)
 
 static std::unordered_map<std::string, winrt_win::Networking::Sockets::StreamSocket> g_sockets;
+/// Reuse one DataWriter per socket - creating multiple on same stream can fail.
+static std::unordered_map<std::string, winrt_win::Storage::Streams::DataWriter> g_writers;
 static std::once_flag g_worker_once;
 static std::thread g_worker;
 static std::mutex g_mutex;
@@ -330,6 +332,7 @@ void BluetoothPairDeviceAsyncSta(const std::string& device_id,
 }
 
 static void BluetoothDisconnectImpl(const std::string& device_id) {
+  g_writers.erase(device_id);
   auto it = g_sockets.find(device_id);
   if (it != g_sockets.end()) {
     try { it->second.Close(); } catch (...) {}
@@ -377,11 +380,16 @@ void BluetoothUnpairDeviceAsync(const std::string& device_id,
 
 static bool BluetoothConnectImpl(const std::string& device_id) {
   BluetoothDisconnectImpl(device_id);
+  BT_LOG("ConnectImpl: device_id=" << device_id.substr(0, 60) << "...");
   try {
     winrt::hstring id(winrt::to_hstring(device_id));
     auto async_svc = winrt_win::Devices::Bluetooth::Rfcomm::RfcommDeviceService::FromIdAsync(id);
     auto service = async_svc.get();
-    if (!service) return false;
+    if (!service) {
+      BT_LOG("ConnectImpl: FromIdAsync returned null service");
+      return false;
+    }
+    BT_LOG("ConnectImpl: got service, connecting socket");
     winrt_win::Networking::Sockets::StreamSocket socket;
     socket.ConnectAsync(
         service.ConnectionHostName(),
@@ -389,8 +397,15 @@ static bool BluetoothConnectImpl(const std::string& device_id) {
         winrt_win::Networking::Sockets::SocketProtectionLevel::BluetoothEncryptionAllowNullAuthentication
     ).get();
     g_sockets[device_id] = std::move(socket);
+    g_writers[device_id] = winrt_win::Storage::Streams::DataWriter(
+        g_sockets[device_id].OutputStream());
+    BT_LOG("ConnectImpl: connected ok");
     return true;
+  } catch (const std::exception& e) {
+    BT_LOG("ConnectImpl: exception " << e.what());
+    return false;
   } catch (...) {
+    BT_LOG("ConnectImpl: unknown exception");
     return false;
   }
 }
@@ -430,17 +445,32 @@ bool BluetoothIsConnected(const std::string& device_id) {
 
 static bool BluetoothSendImpl(const std::string& device_id, const uint8_t* data, size_t size) {
   auto it = g_sockets.find(device_id);
-  if (it == g_sockets.end()) return false;
+  if (it == g_sockets.end()) {
+    BT_LOG("BluetoothSendImpl: socket not found for id=" << device_id.substr(0, 50) << "..., g_sockets.size=" << g_sockets.size());
+    return false;
+  }
   if (size == 0) return true;
+  auto wit = g_writers.find(device_id);
+  if (wit == g_writers.end()) {
+    BT_LOG("BluetoothSendImpl: no DataWriter for device");
+    return false;
+  }
   try {
-    auto out_stream = it->second.OutputStream();
-    winrt_win::Storage::Streams::DataWriter writer(out_stream);
+    BT_LOG("BluetoothSendImpl: sending " << size << " bytes");
     std::vector<uint8_t> vec(data, data + size);
-    writer.WriteBytes(winrt::array_view<uint8_t>(vec));
-    writer.StoreAsync().get();
-    writer.FlushAsync().get();
+    wit->second.WriteBytes(winrt::array_view<uint8_t>(vec));
+    wit->second.StoreAsync().get();
+    wit->second.FlushAsync().get();
+    BT_LOG("BluetoothSendImpl: send ok");
     return true;
+  } catch (const winrt::hresult_error& e) {
+    BT_LOG("BluetoothSendImpl: hresult_error 0x" << std::hex << e.code() << " " << HStringToUtf8(e.message()));
+    return false;
+  } catch (const std::exception& e) {
+    BT_LOG("BluetoothSendImpl: exception " << e.what());
+    return false;
   } catch (...) {
+    BT_LOG("BluetoothSendImpl: unknown exception");
     return false;
   }
 }
@@ -450,6 +480,26 @@ bool BluetoothSend(const std::string& device_id, const uint8_t* data, size_t siz
   bool result = false;
   RunOnMta([&]() { result = BluetoothSendImpl(device_id, copy.data(), copy.size()); });
   return result;
+}
+
+void BluetoothSendAsync(const std::string& device_id,
+                        const uint8_t* data,
+                        size_t size,
+                        std::function<void(bool)> callback) {
+  std::vector<uint8_t> copy(data, data + size);
+  BT_LOG("BluetoothSendAsync: enter, size=" << size);
+  RunOnMtaAsync([device_id, copy, callback]() {
+    BT_LOG("BluetoothSendAsync: worker running send");
+    bool ok = BluetoothSendImpl(device_id, copy.data(), copy.size());
+    BT_LOG("BluetoothSendAsync: send done, ok=" << ok);
+    try {
+      callback(ok);
+    } catch (const std::exception& e) {
+      BT_LOG("BluetoothSendAsync: callback threw: " << e.what());
+    } catch (...) {
+      BT_LOG("BluetoothSendAsync: callback threw unknown");
+    }
+  });
 }
 
 }  // namespace flutter_thermal_printer_windows

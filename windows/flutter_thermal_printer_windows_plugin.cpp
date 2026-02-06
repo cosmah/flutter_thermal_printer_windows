@@ -261,12 +261,17 @@ void FlutterThermalPrinterWindowsPlugin::HandleMethodCall(
       const auto* i = std::get_if<int32_t>(&v);
       if (i) bytes.push_back(static_cast<uint8_t>(*i & 0xFF));
     }
-    bool ok = BluetoothSend(id, bytes.data(), bytes.size());
-    if (ok) {
-      result->Success();
-    } else {
-      result->Error("SendFailed", "Failed to send data to printer");
-    }
+    auto result_holder = std::make_shared<std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>>>(
+        std::move(result));
+    BluetoothSendAsync(id, bytes.data(), bytes.size(), [result_holder](bool ok) {
+      auto& res = *result_holder;
+      if (!res) return;
+      if (ok) {
+        res->Success();
+      } else {
+        res->Error("SendFailed", "Failed to send data to printer");
+      }
+    });
   } else if (method_call.method_name().compare("getPairedPrinters") == 0) {
     auto result_holder = std::make_shared<std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>>>(
         std::move(result));
