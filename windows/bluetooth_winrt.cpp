@@ -49,6 +49,11 @@ static void BtLog(const std::string& msg) {
 }
 
 #define BT_LOG(x) do { std::ostringstream _s; _s << x; BtLog(_s.str()); } while(0)
+#ifdef _DEBUG
+#define BT_VERBOSE(x) BT_LOG(x)
+#else
+#define BT_VERBOSE(x) ((void)0)
+#endif
 
 static std::unordered_map<std::string, winrt_win::Networking::Sockets::StreamSocket> g_sockets;
 /// Reuse one DataWriter per socket - creating multiple on same stream can fail.
@@ -62,14 +67,13 @@ static std::function<void()> g_pending_task;
 static bool g_quit = false;
 
 static void MtaWorkerThread() {
-  BT_LOG("MtaWorkerThread: starting, calling init_apartment(MTA)");
+  BT_VERBOSE("MtaWorkerThread: starting");
   try {
     winrt::init_apartment(winrt::apartment_type::multi_threaded);
-    BT_LOG("MtaWorkerThread: init_apartment done");
   } catch (const std::exception& e) {
-    BT_LOG(std::string("MtaWorkerThread: init_apartment exception: ") + e.what());
+    BT_LOG("MtaWorkerThread ERROR: " << e.what());
   } catch (...) {
-    BT_LOG("MtaWorkerThread: init_apartment unknown exception");
+    BT_LOG("MtaWorkerThread ERROR: init_apartment failed");
   }
   std::unique_lock<std::mutex> lock(g_mutex);
   for (;;) {
@@ -78,37 +82,29 @@ static void MtaWorkerThread() {
     std::function<void()> task = std::move(g_pending_task);
     g_pending_task = nullptr;
     lock.unlock();
-    BT_LOG("MtaWorkerThread: running task");
     try {
       task();
-      BT_LOG("MtaWorkerThread: task completed");
     } catch (const std::exception& e) {
-      BT_LOG(std::string("MtaWorkerThread: task threw: ") + e.what());
+      BT_LOG("MtaWorkerThread ERROR: " << e.what());
     } catch (...) {
-      BT_LOG("MtaWorkerThread: task threw unknown exception");
+      BT_LOG("MtaWorkerThread ERROR: task threw unknown");
     }
     lock.lock();
     g_cv_done.notify_one();
   }
-  BT_LOG("MtaWorkerThread: exiting");
 }
 
 /// Run WinRT work on a dedicated MTA thread. Blocking .get() on IAsyncOperation
 /// is not allowed on STA; running on MTA avoids the !is_sta_thread() assertion.
 static void RunOnMta(std::function<void()> f) {
-  BT_LOG("RunOnMta: enter");
   std::call_once(g_worker_once, []() {
-    BT_LOG("RunOnMta: starting worker thread");
     g_worker = std::thread(MtaWorkerThread);
     g_worker.detach();
-    BT_LOG("RunOnMta: worker started");
   });
-  BT_LOG("RunOnMta: posting task, waiting");
   std::unique_lock<std::mutex> lock(g_mutex);
   g_pending_task = std::move(f);
   g_cv_task.notify_one();
   g_cv_done.wait(lock, [] { return g_pending_task == nullptr; });
-  BT_LOG("RunOnMta: task done, exit");
 }
 
 void BluetoothWinRtInit() {}
@@ -131,60 +127,47 @@ static std::string HStringToUtf8(const winrt::hstring& hs) {
 
 static std::vector<SppDeviceInfo> BluetoothFindAllSppDevicesImpl() {
   std::vector<SppDeviceInfo> out;
-  BT_LOG("FindAllSppDevicesImpl: enter");
   try {
-    BT_LOG("FindAllSppDevicesImpl: getting selector");
     auto selector = winrt_win::Devices::Bluetooth::Rfcomm::RfcommDeviceService::GetDeviceSelector(
         winrt_win::Devices::Bluetooth::Rfcomm::RfcommServiceId::SerialPort());
-    BT_LOG("FindAllSppDevicesImpl: calling FindAllAsync");
     auto async_find = winrt_win::Devices::Enumeration::DeviceInformation::FindAllAsync(selector);
-    BT_LOG("FindAllSppDevicesImpl: calling .get()");
     auto collection = async_find.get();
     uint32_t count = collection.Size();
-    BT_LOG("FindAllSppDevicesImpl: got " << count << " devices");
     for (uint32_t i = 0; i < count; i++) {
       try {
-        BT_LOG("FindAllSppDevicesImpl: processing device " << (i + 1) << "/" << count);
         auto di = collection.GetAt(i);
         SppDeviceInfo info;
         info.id = HStringToUtf8(di.Id());
-        BT_LOG("FindAllSppDevicesImpl: device " << i << " id=" << info.id);
         // di.Name(), Properties(), Pairing() cause crashes on some devices; use defaults.
         info.name = "Bluetooth Printer";
         info.signal_strength = -50;
         info.is_paired = false;
         info.mac_address = info.id;
         info.is_connected = (g_sockets.find(info.id) != g_sockets.end());
-        BT_LOG("FindAllSppDevicesImpl: device " << i << " ok, name=" << info.name << ", pushing");
         out.push_back(std::move(info));
       } catch (const std::exception& e) {
-        BT_LOG("FindAllSppDevicesImpl: device " << i << " SKIP exception: " << e.what());
+        BT_LOG("FindAllSppDevicesImpl: skip device " << i << ": " << e.what());
       } catch (...) {
-        BT_LOG("FindAllSppDevicesImpl: device " << i << " SKIP unknown exception");
+        BT_LOG("FindAllSppDevicesImpl: skip device " << i << " (unknown)");
       }
     }
-    BT_LOG("FindAllSppDevicesImpl: done, " << out.size() << " devices collected");
   } catch (const std::exception& e) {
-    BT_LOG("FindAllSppDevicesImpl: FATAL exception: " << e.what());
+    BT_LOG("FindAllSppDevicesImpl ERROR: " << e.what());
   } catch (...) {
-    BT_LOG("FindAllSppDevicesImpl: FATAL unknown exception");
+    BT_LOG("FindAllSppDevicesImpl ERROR: unknown");
   }
   return out;
 }
 
 std::vector<SppDeviceInfo> BluetoothFindAllSppDevices() {
-  BT_LOG("BluetoothFindAllSppDevices: enter");
   std::vector<SppDeviceInfo> result;
   RunOnMta([&result]() { result = BluetoothFindAllSppDevicesImpl(); });
-  BT_LOG("BluetoothFindAllSppDevices: got " << result.size() << " devices");
   return result;
 }
 
 /// Post task to worker; callback runs on worker thread when scan completes.
 static void RunOnMtaAsync(std::function<void()> f) {
-  BT_LOG("RunOnMtaAsync: posting task (fire-and-forget)");
   std::call_once(g_worker_once, []() {
-    BT_LOG("RunOnMtaAsync: starting worker thread");
     g_worker = std::thread(MtaWorkerThread);
     g_worker.detach();
   });
@@ -194,17 +177,14 @@ static void RunOnMtaAsync(std::function<void()> f) {
 }
 
 void BluetoothFindAllSppDevicesAsync(std::function<void(std::vector<SppDeviceInfo>)> callback) {
-  BT_LOG("BluetoothFindAllSppDevicesAsync: enter");
   RunOnMtaAsync([callback]() {
-    BT_LOG("BluetoothFindAllSppDevicesAsync: worker running scan");
     std::vector<SppDeviceInfo> result = BluetoothFindAllSppDevicesImpl();
-    BT_LOG("BluetoothFindAllSppDevicesAsync: scan done, invoking callback with " << result.size() << " devices");
     try {
       callback(std::move(result));
     } catch (const std::exception& e) {
-      BT_LOG("BluetoothFindAllSppDevicesAsync: callback threw: " << e.what());
+      BT_LOG("BluetoothFindAllSppDevicesAsync ERROR: " << e.what());
     } catch (...) {
-      BT_LOG("BluetoothFindAllSppDevicesAsync: callback threw unknown");
+      BT_LOG("BluetoothFindAllSppDevicesAsync ERROR: callback threw unknown");
     }
   });
 }
@@ -220,33 +200,21 @@ static std::string GetDeviceIdForPairing(const std::string& rfcomm_or_device_id)
 
 static bool BluetoothPairDeviceImpl(const std::string& device_id) {
   std::string id_for_pairing = GetDeviceIdForPairing(device_id);
-  BT_LOG("PairImpl: device_id=" << device_id.substr(0, 60) << "... id_for_pairing=" << id_for_pairing.substr(0, 60) << "...");
   try {
-    BT_LOG("PairImpl: 1 creating hstring");
     winrt::hstring id(winrt::to_hstring(id_for_pairing));
-    BT_LOG("PairImpl: 2 calling CreateFromIdAsync");
     auto async_di = winrt_win::Devices::Enumeration::DeviceInformation::CreateFromIdAsync(id);
-    BT_LOG("PairImpl: 3 calling .get()");
     auto di = async_di.get();
-    BT_LOG("PairImpl: 4 got DeviceInformation");
     auto pairing = di.Pairing();
-    BT_LOG("PairImpl: 5 got Pairing");
-    // Always call PairAsync: IsPaired() can be stale/wrong for device-level ID.
-    // If already paired, PairAsync returns AlreadyPaired.
-    BT_LOG("PairImpl: 6 calling PairAsync");
     auto pair_op = pairing.PairAsync();
-    BT_LOG("PairImpl: 7 calling pair_op.get()");
     auto pair_result = pair_op.get();
-    BT_LOG("PairImpl: 8 got result");
     bool ok = (pair_result.Status() == winrt_win::Devices::Enumeration::DevicePairingResultStatus::Paired ||
                pair_result.Status() == winrt_win::Devices::Enumeration::DevicePairingResultStatus::AlreadyPaired);
-    BT_LOG("PairImpl: 9 status=" << (int)pair_result.Status() << " ok=" << ok);
     return ok;
   } catch (const std::exception& e) {
-    BT_LOG("PairImpl: exception " << e.what());
+    BT_LOG("PairImpl ERROR: " << e.what());
     return false;
   } catch (...) {
-    BT_LOG("PairImpl: unknown exception");
+    BT_LOG("PairImpl ERROR: unknown");
     return false;
   }
 }
@@ -259,17 +227,14 @@ bool BluetoothPairDevice(const std::string& device_id) {
 
 void BluetoothPairDeviceAsync(const std::string& device_id,
                               std::function<void(bool)> callback) {
-  BT_LOG("BluetoothPairDeviceAsync: enter (MTA required: .get() asserts !is_sta_thread)");
   RunOnMtaAsync([device_id, callback]() {
-    BT_LOG("BluetoothPairDeviceAsync: worker running pair");
     bool paired = BluetoothPairDeviceImpl(device_id);
-    BT_LOG("BluetoothPairDeviceAsync: pair done, paired=" << paired);
     try {
       callback(paired);
     } catch (const std::exception& e) {
-      BT_LOG("BluetoothPairDeviceAsync: callback threw: " << e.what());
+      BT_LOG("BluetoothPairDeviceAsync ERROR: " << e.what());
     } catch (...) {
-      BT_LOG("BluetoothPairDeviceAsync: callback threw unknown");
+      BT_LOG("BluetoothPairDeviceAsync ERROR: callback threw");
     }
   });
 }
@@ -279,7 +244,6 @@ void BluetoothPairDeviceAsync(const std::string& device_id,
 void BluetoothPairDeviceAsyncSta(const std::string& device_id,
                                  std::function<void(bool)> callback) {
   std::string id_for_pairing = GetDeviceIdForPairing(device_id);
-  BT_LOG("BluetoothPairDeviceAsyncSta: enter, id_for_pairing=" << id_for_pairing.substr(0, 50) << "...");
   try {
     winrt::hstring id(winrt::to_hstring(id_for_pairing));
     auto async_di = winrt_win::Devices::Enumeration::DeviceInformation::CreateFromIdAsync(id);
@@ -287,7 +251,7 @@ void BluetoothPairDeviceAsyncSta(const std::string& device_id,
     async_di.Completed([callback](auto const& op, AsyncStatus status) {
       try {
         if (status != AsyncStatus::Completed) {
-          BT_LOG("BluetoothPairDeviceAsyncSta: CreateFromIdAsync status=" << (int)status);
+          BT_LOG("PairDeviceAsyncSta ERROR: CreateFromIdAsync status=" << (int)status);
           callback(false);
           return;
         }
@@ -296,7 +260,7 @@ void BluetoothPairDeviceAsyncSta(const std::string& device_id,
         pair_op.Completed([callback](auto const& op2, AsyncStatus status2) {
           try {
             if (status2 != AsyncStatus::Completed) {
-              BT_LOG("BluetoothPairDeviceAsyncSta: PairAsync status=" << (int)status2);
+              BT_LOG("PairDeviceAsyncSta ERROR: PairAsync status=" << (int)status2);
               callback(false);
               return;
             }
@@ -304,29 +268,28 @@ void BluetoothPairDeviceAsyncSta(const std::string& device_id,
             using Status = winrt_win::Devices::Enumeration::DevicePairingResultStatus;
             bool ok = (pair_result.Status() == Status::Paired ||
                        pair_result.Status() == Status::AlreadyPaired);
-            BT_LOG("BluetoothPairDeviceAsyncSta: pair done status=" << (int)pair_result.Status() << " ok=" << ok);
             callback(ok);
           } catch (const std::exception& e) {
-            BT_LOG("BluetoothPairDeviceAsyncSta: PairAsync Completed exception: " << e.what());
+            BT_LOG("PairDeviceAsyncSta ERROR: " << e.what());
             callback(false);
           } catch (...) {
-            BT_LOG("BluetoothPairDeviceAsyncSta: PairAsync Completed unknown exception");
+            BT_LOG("PairDeviceAsyncSta ERROR: unknown");
             callback(false);
           }
         });
       } catch (const std::exception& e) {
-        BT_LOG("BluetoothPairDeviceAsyncSta: CreateFromIdAsync Completed exception: " << e.what());
+        BT_LOG("PairDeviceAsyncSta ERROR: " << e.what());
         callback(false);
       } catch (...) {
-        BT_LOG("BluetoothPairDeviceAsyncSta: CreateFromIdAsync Completed unknown exception");
+        BT_LOG("PairDeviceAsyncSta ERROR: unknown");
         callback(false);
       }
     });
   } catch (const std::exception& e) {
-    BT_LOG("BluetoothPairDeviceAsyncSta: exception: " << e.what());
+    BT_LOG("PairDeviceAsyncSta ERROR: " << e.what());
     callback(false);
   } catch (...) {
-    BT_LOG("BluetoothPairDeviceAsyncSta: unknown exception");
+    BT_LOG("PairDeviceAsyncSta ERROR: unknown");
     callback(false);
   }
 }
@@ -363,33 +326,28 @@ bool BluetoothUnpairDevice(const std::string& device_id) {
 
 void BluetoothUnpairDeviceAsync(const std::string& device_id,
                                 std::function<void(bool)> callback) {
-  BT_LOG("BluetoothUnpairDeviceAsync: enter");
   RunOnMtaAsync([device_id, callback]() {
-    BT_LOG("BluetoothUnpairDeviceAsync: worker running unpair");
     bool ok = BluetoothUnpairDeviceImpl(device_id);
-    BT_LOG("BluetoothUnpairDeviceAsync: unpair done, ok=" << ok);
     try {
       callback(ok);
     } catch (const std::exception& e) {
-      BT_LOG("BluetoothUnpairDeviceAsync: callback threw: " << e.what());
+      BT_LOG("BluetoothUnpairDeviceAsync ERROR: " << e.what());
     } catch (...) {
-      BT_LOG("BluetoothUnpairDeviceAsync: callback threw unknown");
+      BT_LOG("BluetoothUnpairDeviceAsync ERROR: callback threw");
     }
   });
 }
 
 static bool BluetoothConnectImpl(const std::string& device_id) {
   BluetoothDisconnectImpl(device_id);
-  BT_LOG("ConnectImpl: device_id=" << device_id.substr(0, 60) << "...");
   try {
     winrt::hstring id(winrt::to_hstring(device_id));
     auto async_svc = winrt_win::Devices::Bluetooth::Rfcomm::RfcommDeviceService::FromIdAsync(id);
     auto service = async_svc.get();
     if (!service) {
-      BT_LOG("ConnectImpl: FromIdAsync returned null service");
+      BT_LOG("ConnectImpl ERROR: FromIdAsync returned null");
       return false;
     }
-    BT_LOG("ConnectImpl: got service, connecting socket");
     winrt_win::Networking::Sockets::StreamSocket socket;
     socket.ConnectAsync(
         service.ConnectionHostName(),
@@ -399,13 +357,12 @@ static bool BluetoothConnectImpl(const std::string& device_id) {
     g_sockets[device_id] = std::move(socket);
     g_writers[device_id] = winrt_win::Storage::Streams::DataWriter(
         g_sockets[device_id].OutputStream());
-    BT_LOG("ConnectImpl: connected ok");
     return true;
   } catch (const std::exception& e) {
-    BT_LOG("ConnectImpl: exception " << e.what());
+    BT_LOG("ConnectImpl ERROR: " << e.what());
     return false;
   } catch (...) {
-    BT_LOG("ConnectImpl: unknown exception");
+    BT_LOG("ConnectImpl ERROR: unknown");
     return false;
   }
 }
@@ -418,17 +375,14 @@ bool BluetoothConnect(const std::string& device_id) {
 
 void BluetoothConnectAsync(const std::string& device_id,
                            std::function<void(bool)> callback) {
-  BT_LOG("BluetoothConnectAsync: enter");
   RunOnMtaAsync([device_id, callback]() {
-    BT_LOG("BluetoothConnectAsync: worker running connect");
     bool connected = BluetoothConnectImpl(device_id);
-    BT_LOG("BluetoothConnectAsync: connect done, connected=" << connected);
     try {
       callback(connected);
     } catch (const std::exception& e) {
-      BT_LOG("BluetoothConnectAsync: callback threw: " << e.what());
+      BT_LOG("BluetoothConnectAsync ERROR: " << e.what());
     } catch (...) {
-      BT_LOG("BluetoothConnectAsync: callback threw unknown");
+      BT_LOG("BluetoothConnectAsync ERROR: callback threw");
     }
   });
 }
@@ -446,31 +400,29 @@ bool BluetoothIsConnected(const std::string& device_id) {
 static bool BluetoothSendImpl(const std::string& device_id, const uint8_t* data, size_t size) {
   auto it = g_sockets.find(device_id);
   if (it == g_sockets.end()) {
-    BT_LOG("BluetoothSendImpl: socket not found for id=" << device_id.substr(0, 50) << "..., g_sockets.size=" << g_sockets.size());
+    BT_LOG("BluetoothSendImpl ERROR: socket not found");
     return false;
   }
   if (size == 0) return true;
   auto wit = g_writers.find(device_id);
   if (wit == g_writers.end()) {
-    BT_LOG("BluetoothSendImpl: no DataWriter for device");
+    BT_LOG("BluetoothSendImpl ERROR: no DataWriter");
     return false;
   }
   try {
-    BT_LOG("BluetoothSendImpl: sending " << size << " bytes");
     std::vector<uint8_t> vec(data, data + size);
     wit->second.WriteBytes(winrt::array_view<uint8_t>(vec));
     wit->second.StoreAsync().get();
     wit->second.FlushAsync().get();
-    BT_LOG("BluetoothSendImpl: send ok");
     return true;
   } catch (const winrt::hresult_error& e) {
-    BT_LOG("BluetoothSendImpl: hresult_error 0x" << std::hex << e.code() << " " << HStringToUtf8(e.message()));
+    BT_LOG("BluetoothSendImpl ERROR: 0x" << std::hex << e.code() << " " << HStringToUtf8(e.message()));
     return false;
   } catch (const std::exception& e) {
-    BT_LOG("BluetoothSendImpl: exception " << e.what());
+    BT_LOG("BluetoothSendImpl ERROR: " << e.what());
     return false;
   } catch (...) {
-    BT_LOG("BluetoothSendImpl: unknown exception");
+    BT_LOG("BluetoothSendImpl ERROR: unknown");
     return false;
   }
 }
@@ -487,17 +439,14 @@ void BluetoothSendAsync(const std::string& device_id,
                         size_t size,
                         std::function<void(bool)> callback) {
   std::vector<uint8_t> copy(data, data + size);
-  BT_LOG("BluetoothSendAsync: enter, size=" << size);
   RunOnMtaAsync([device_id, copy, callback]() {
-    BT_LOG("BluetoothSendAsync: worker running send");
     bool ok = BluetoothSendImpl(device_id, copy.data(), copy.size());
-    BT_LOG("BluetoothSendAsync: send done, ok=" << ok);
     try {
       callback(ok);
     } catch (const std::exception& e) {
-      BT_LOG("BluetoothSendAsync: callback threw: " << e.what());
+      BT_LOG("BluetoothSendAsync ERROR: " << e.what());
     } catch (...) {
-      BT_LOG("BluetoothSendAsync: callback threw unknown");
+      BT_LOG("BluetoothSendAsync ERROR: callback threw");
     }
   });
 }

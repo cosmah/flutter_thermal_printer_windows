@@ -1,3 +1,5 @@
+import 'package:flutter/services.dart';
+
 /// Base exception for thermal printer operations.
 ///
 /// On failure, async API methods throw a [ThermalPrinterException] (or subclass).
@@ -15,6 +17,35 @@ abstract class ThermalPrinterException implements Exception {
   final String? errorCode;
   final Object? cause;
   final Map<String, Object?>? context;
+
+  /// User-facing message suitable for UI. Falls back to [message] if none set.
+  String get userFriendlyMessage => message;
+
+  /// Creates an exception from a [PlatformException].
+  static ThermalPrinterException fromPlatform(PlatformException e) {
+    final msg = _userMessageForCode(e.code) ?? e.message ?? 'Unknown error';
+    return fromCode(msg, errorCode: e.code);
+  }
+
+  static String? _userMessageForCode(String? code) {
+    if (code == null) return null;
+    switch (code) {
+      case 'ScanFailed':
+        return 'Bluetooth scan failed. Ensure Bluetooth is on and try again.';
+      case 'PairFailed':
+        return 'Pairing failed. Accept the pairing request on the printer.';
+      case 'UnpairFailed':
+        return 'Unpairing failed. Try again or unpair from Windows Settings.';
+      case 'ConnectFailed':
+        return 'Connection failed. Ensure the printer is on and in range.';
+      case 'SendFailed':
+        return 'Print failed. Check printer connection and paper.';
+      case 'InvalidArguments':
+        return 'Invalid printer or arguments.';
+      default:
+        return null;
+    }
+  }
 
   /// Creates an appropriate exception from a native [errorCode] and [message].
   /// Maps common Windows/Bluetooth codes to subclass types.

@@ -110,35 +110,30 @@ void FlutterThermalPrinterWindowsPlugin::HandleMethodCall(
     }
     result->Success(flutter::EncodableValue(version_stream.str()));
   } else if (method_call.method_name().compare("scanForPrinters") == 0) {
-    PLUGIN_LOG("========== scanForPrinters START (async) ==========");
-    PLUGIN_LOG("scanForPrinters: posting async, returning immediately");
     auto result_holder = std::make_shared<std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>>>(
         std::move(result));
     BluetoothFindAllSppDevicesAsync([result_holder](std::vector<SppDeviceInfo> devices) {
       auto& res = *result_holder;
       if (!res) return;
       try {
-        PLUGIN_LOG("scanForPrinters: async callback got " << devices.size() << " devices");
         flutter::EncodableList list;
         for (size_t i = 0; i < devices.size(); i++) {
           try {
             list.push_back(flutter::EncodableValue(SppDeviceToEncodableMap(devices[i])));
           } catch (const std::exception& e) {
-            PLUGIN_LOG("scanForPrinters: skip device " << i << " encode error: " << e.what());
+            PLUGIN_LOG("scanForPrinters: skip device " << i << ": " << e.what());
           } catch (...) {
-            PLUGIN_LOG("scanForPrinters: skip device " << i << " encode unknown error");
+            PLUGIN_LOG("scanForPrinters: skip device " << i << " (unknown error)");
           }
         }
-        PLUGIN_LOG("scanForPrinters: calling result->Success with " << list.size() << " devices");
         res->Success(flutter::EncodableValue(list));
       } catch (const std::exception& e) {
-        PLUGIN_LOG("scanForPrinters: async callback ERROR: " << e.what());
+        PLUGIN_LOG("scanForPrinters ERROR: " << e.what());
         res->Error("ScanFailed", e.what());
       } catch (...) {
-        PLUGIN_LOG("scanForPrinters: async callback unknown ERROR");
+        PLUGIN_LOG("scanForPrinters ERROR: unknown");
         res->Error("ScanFailed", "Unknown error encoding scan results");
       }
-      PLUGIN_LOG("scanForPrinters: async complete");
     });
   } else if (method_call.method_name().compare("pairDevice") == 0) {
     const flutter::EncodableValue* args_value = method_call.arguments();

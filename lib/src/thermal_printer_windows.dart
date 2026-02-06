@@ -1,5 +1,7 @@
 import 'dart:typed_data';
 
+import 'package:flutter/services.dart';
+
 import '../flutter_thermal_printer_windows_platform_interface.dart';
 import 'models/receipt.dart';
 import 'models/bluetooth_printer.dart';
@@ -41,24 +43,44 @@ class ThermalPrinterWindows {
   /// Scans for Bluetooth thermal printers within [timeout].
   Future<List<BluetoothPrinter>> scanForPrinters({
     Duration timeout = defaultScanTimeout,
-  }) => _scanner.scanForThermalPrinters(timeout);
+  }) async {
+    try {
+      return await _scanner.scanForThermalPrinters(timeout);
+    } on PlatformException catch (e) {
+      throw ThermalPrinterException.fromPlatform(e);
+    }
+  }
 
   /// Pairs with [printer]. Throws on failure.
   Future<void> pairPrinter(BluetoothPrinter printer) async {
-    final result = await _pairingManager.pairDevice(printer);
-    if (!result.isPaired && result.error != null) throw result.error!;
-    if (!result.isPaired) {
-      throw ConnectionFailedException('Pairing failed');
+    try {
+      final result = await _pairingManager.pairDevice(printer);
+      if (!result.isPaired && result.error != null) throw result.error!;
+      if (!result.isPaired) {
+        throw DeviceNotPairedException('Pairing failed');
+      }
+    } on PlatformException catch (e) {
+      throw ThermalPrinterException.fromPlatform(e);
     }
   }
 
   /// Unpairs [printer].
-  Future<void> unpairPrinter(BluetoothPrinter printer) =>
-      _pairingManager.unpairDevice(printer);
+  Future<void> unpairPrinter(BluetoothPrinter printer) async {
+    try {
+      await _pairingManager.unpairDevice(printer);
+    } on PlatformException catch (e) {
+      throw ThermalPrinterException.fromPlatform(e);
+    }
+  }
 
   /// Returns paired printers.
-  Future<List<BluetoothPrinter>> getPairedPrinters() =>
-      _platform.getPairedPrinters();
+  Future<List<BluetoothPrinter>> getPairedPrinters() async {
+    try {
+      return await _platform.getPairedPrinters();
+    } on PlatformException catch (e) {
+      throw ThermalPrinterException.fromPlatform(e);
+    }
+  }
 
   /// Connects to [printer]. Throws on failure.
   ///
@@ -68,13 +90,17 @@ class ThermalPrinterWindows {
     BluetoothPrinter printer, {
     bool printSampleOnSuccess = false,
   }) async {
-    final result = await _pairingManager.connectToDevice(printer);
-    if (!result.isConnected && result.error != null) throw result.error!;
-    if (!result.isConnected) {
-      throw ConnectionFailedException('Connection failed');
-    }
-    if (printSampleOnSuccess) {
-      await printConnectionSuccessSample(printer);
+    try {
+      final result = await _pairingManager.connectToDevice(printer);
+      if (!result.isConnected && result.error != null) throw result.error!;
+      if (!result.isConnected) {
+        throw ConnectionFailedException('Connection failed');
+      }
+      if (printSampleOnSuccess) {
+        await printConnectionSuccessSample(printer);
+      }
+    } on PlatformException catch (e) {
+      throw ThermalPrinterException.fromPlatform(e);
     }
   }
 
@@ -83,14 +109,15 @@ class ThermalPrinterWindows {
   /// Use after a successful [connect] to verify the link. The sample
   /// includes "Connection successful", the printer name, and the current
   /// date/time.
-  Future<void> printConnectionSuccessSample(BluetoothPrinter printer) {
+  Future<void> printConnectionSuccessSample(BluetoothPrinter printer) async {
     final now = DateTime.now();
     final dateStr =
         '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} '
         '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
     final receipt = Receipt(
       header: ReceiptHeader(
-        text: 'Connection successful\n${printer.name.isNotEmpty ? printer.name : printer.macAddress}\n$dateStr',
+        text:
+            'Connection successful\n${printer.name.isNotEmpty ? printer.name : printer.macAddress}\n$dateStr',
       ),
       items: [
         ReceiptItem(type: ReceiptItemType.line),
@@ -102,33 +129,56 @@ class ThermalPrinterWindows {
       ],
       settings: ReceiptSettings(paperWidth: 58, autoCut: true),
     );
-    return _printEngine.sendPrintJob(printer, PrintJob.receipt(receipt));
+    try {
+      await _printEngine.sendPrintJob(printer, PrintJob.receipt(receipt));
+    } on PlatformException catch (e) {
+      throw ThermalPrinterException.fromPlatform(e);
+    }
   }
 
   /// Disconnects from [printer].
-  Future<void> disconnect(BluetoothPrinter printer) =>
-      _pairingManager.disconnectFromDevice(printer);
+  Future<void> disconnect(BluetoothPrinter printer) async {
+    try {
+      await _pairingManager.disconnectFromDevice(printer);
+    } on PlatformException catch (e) {
+      throw ThermalPrinterException.fromPlatform(e);
+    }
+  }
 
   /// Stream of connection state for [printer].
   Stream<ConnectionState> getConnectionStateStream(BluetoothPrinter printer) =>
       _pairingManager.watchConnectionState(printer);
 
   /// Prints [text] as plain text to [printer].
-  Future<void> printText(BluetoothPrinter printer, String text) {
+  Future<void> printText(BluetoothPrinter printer, String text) async {
     final receipt = Receipt(
       items: [ReceiptItem(type: ReceiptItemType.text, text: text)],
       settings: ReceiptSettings(),
     );
-    return _printEngine.sendPrintJob(printer, PrintJob.receipt(receipt));
+    try {
+      await _printEngine.sendPrintJob(printer, PrintJob.receipt(receipt));
+    } on PlatformException catch (e) {
+      throw ThermalPrinterException.fromPlatform(e);
+    }
   }
 
   /// Prints [receipt] to [printer].
-  Future<void> printReceipt(BluetoothPrinter printer, Receipt receipt) =>
-      _printEngine.sendPrintJob(printer, PrintJob.receipt(receipt));
+  Future<void> printReceipt(BluetoothPrinter printer, Receipt receipt) async {
+    try {
+      await _printEngine.sendPrintJob(printer, PrintJob.receipt(receipt));
+    } on PlatformException catch (e) {
+      throw ThermalPrinterException.fromPlatform(e);
+    }
+  }
 
   /// Sends raw [data] to [printer].
-  Future<void> printRawBytes(BluetoothPrinter printer, Uint8List data) =>
-      _printEngine.sendRawCommands(printer, data);
+  Future<void> printRawBytes(BluetoothPrinter printer, Uint8List data) async {
+    try {
+      await _printEngine.sendRawCommands(printer, data);
+    } on PlatformException catch (e) {
+      throw ThermalPrinterException.fromPlatform(e);
+    }
+  }
 
   /// Returns capabilities for [printer].
   Future<PrinterCapabilities> getPrinterCapabilities(
@@ -138,4 +188,12 @@ class ThermalPrinterWindows {
   /// Returns current status for [printer].
   Future<PrinterStatus> getPrinterStatus(BluetoothPrinter printer) =>
       _platform.getPrinterStatus(printer);
+}
+
+/// Formats [error] as a user-friendly string for [operation].
+String formatPrinterError(String operation, Object error) {
+  if (error is ThermalPrinterException) {
+    return '$operation failed: ${error.message}';
+  }
+  return '$operation failed: $error';
 }

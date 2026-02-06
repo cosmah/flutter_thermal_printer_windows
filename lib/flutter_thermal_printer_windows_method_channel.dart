@@ -29,21 +29,20 @@ class MethodChannelFlutterThermalPrinterWindows
 
   @override
   Future<List<BluetoothPrinter>> scanForPrinters({Duration? timeout}) async {
-    debugPrint('[ThermalPlugin] scanForPrinters: calling native, timeout=$timeout');
+    if (kDebugMode) {
+      debugPrint('[ThermalPlugin] scanForPrinters: timeout=$timeout');
+    }
     final timeoutMs = timeout?.inMilliseconds;
     try {
       final result = await methodChannel.invokeMethod<List<Object?>>(
         'scanForPrinters',
         <String, Object?>{'timeoutMs': timeoutMs},
       );
-      debugPrint('[ThermalPlugin] scanForPrinters: native returned, result==null=${result == null}, length=${result?.length ?? 0}');
       if (result == null) return [];
-      final decoded = _decodePrinters(result);
-      debugPrint('[ThermalPlugin] scanForPrinters: decoded ${decoded.length} printers');
-      return decoded;
+      return _decodePrinters(result);
     } catch (e, st) {
-      debugPrint('[ThermalPlugin] scanForPrinters: ERROR $e');
-      debugPrint('[ThermalPlugin] scanForPrinters: stack $st');
+      debugPrint('[ThermalPlugin] scanForPrinters ERROR: $e');
+      if (kDebugMode) debugPrint('[ThermalPlugin] stack: $st');
       rethrow;
     }
   }
@@ -53,7 +52,6 @@ class MethodChannelFlutterThermalPrinterWindows
   }
 
   static BluetoothPrinter _decodePrinter(Map<Object?, Object?> map) {
-    debugPrint('[ThermalPlugin] _decodePrinter: id=${map['id']} name=${map['name']}');
     Object? v(key) => map[key];
     String s(key) => (v(key) as String?) ?? '';
     int i(key) => (v(key) as int?) ?? 0;
