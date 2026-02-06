@@ -102,20 +102,14 @@ try {
 }
 ```
 
-## Example app
+## Example
 
-The `example/` app is a small POS-style demo:
+The Usage section above shows the main API. To run a demo:
 
-- Scan for printers
-- Load paired printers
-- Pair / Unpair / Connect / Disconnect
-- Print test line and sample receipt
-
-Run from the package root:
-
-```bash
-cd example && flutter run -d windows
-```
+1. Create a new Flutter project: `flutter create my_pos_app`
+2. Add this plugin to `pubspec.yaml` and run `flutter pub get`
+3. Add the usage code above to your app (e.g. a button that calls `scanForPrinters`, then `pairPrinter` and `connect`)
+4. Run: `flutter run -d windows`
 
 ## Troubleshooting
 
@@ -134,7 +128,7 @@ cd example && flutter run -d windows
 
 ### Print job does nothing
 
-- Confirm the printer is **connected** (not only paired): use Connect in the example app or `api.connect(printer)`.
+- Confirm the printer is **connected** (not only paired): call `api.connect(printer)` before printing.
 - Check paper and power; some printers report status via `getPrinterStatus`.
 - Try `printText` with a short string to verify the link; then try receipt/raw.
 

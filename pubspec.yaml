@@ -1,12 +1,19 @@
 name: flutter_thermal_printer_windows
 description: "Bluetooth thermal printer support for Flutter on Windows. Discovery, pairing, connection, and ESC/POS receipt printing for POS applications."
 version: 0.0.1
-homepage: https://github.com/your-org/flutter_thermal_printer_windows
-repository: https://github.com/your-org/flutter_thermal_printer_windows
-issue_tracker: https://github.com/your-org/flutter_thermal_printer_windows/issues
+homepage: https://github.com/cosmah/flutter_thermal_printer_windows
+repository: https://github.com/cosmah/flutter_thermal_printer_windows
+issue_tracker: https://github.com/cosmah/flutter_thermal_printer_windows/issues
+
+topics:
+  - bluetooth
+  - thermal-printer
+  - windows
+  - esc-pos
+  - pos
 
 environment:
-  sdk: ^3.10.8
+  sdk: ^3.0.0
   flutter: '>=3.3.0'
 
 dependencies:
